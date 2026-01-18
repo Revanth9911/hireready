@@ -2,75 +2,71 @@ import { NextResponse } from "next/server";
 import mammoth from "mammoth";
 import { Buffer } from "buffer";
 
-const KEYWORDS = [
-  "javascript",
-  "react",
-  "node",
-  "html",
-  "css",
-  "git",
-  "api",
-  "database",
+const CORE_SKILLS = ["javascript", "react", "node", "html", "css"];
+const EXPERIENCE_WORDS = [
+  "experience", "intern", "worked", "developed",
+  "implemented", "built", "designed", "optimized", "deployed"
 ];
+const PROJECT_WORDS = ["project", "application", "system", "tool"];
 
 export async function POST(req: Request) {
   try {
     const formData = await req.formData();
     const file = formData.get("resume") as File | null;
+    const jd = (formData.get("jd") as string | null)?.toLowerCase() || "";
 
     if (!file) {
-      return NextResponse.json(
-        { error: "No file uploaded" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Resume missing" }, { status: 400 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    let text = "";
+    const doc = await mammoth.extractRawText({ buffer });
+    const text = doc.value.toLowerCase();
 
-    // ✅ DOC / DOCX — reliable
-    if (
-      file.type ===
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      file.type === "application/msword"
-    ) {
-      const data = await mammoth.extractRawText({ buffer });
-      text = data.value;
-    }
-    // ⚠️ PDF — fallback (MVP-safe)
-    else if (file.type === "application/pdf") {
-      return NextResponse.json({
-        score: 0,
-        missing: KEYWORDS,
-        note: "PDF parsing limited in MVP. Please upload DOCX for accurate results.",
-      });
-    } else {
-      return NextResponse.json(
-        { error: "Unsupported file type" },
-        { status: 400 }
-      );
-    }
-
-    text = text.toLowerCase();
-
-    let matched = 0;
+    let score = 0;
     const missing: string[] = [];
 
-    for (const keyword of KEYWORDS) {
-      if (text.includes(keyword)) {
-        matched++;
-      } else {
-        missing.push(keyword);
-      }
+    // 1️⃣ Core skills (40)
+    const coreMatched = CORE_SKILLS.filter(k => text.includes(k));
+    score += (coreMatched.length / CORE_SKILLS.length) * 40;
+
+    CORE_SKILLS.forEach(k => {
+      if (!text.includes(k)) missing.push(k);
+    });
+
+    // 2️⃣ Job description match (25)
+    if (jd) {
+      const jdWords = jd.split(/\W+/).filter(w => w.length > 3);
+      const jdMatched = jdWords.filter(w => text.includes(w));
+      score += Math.min(25, jdMatched.length * 2);
     }
 
-    const score = Math.round((matched / KEYWORDS.length) * 100);
+    // 3️⃣ Experience signals (15)
+    const expHits = EXPERIENCE_WORDS.filter(w => text.includes(w)).length;
+    score += Math.min(15, expHits * 3);
 
-    return NextResponse.json({ score, missing });
-  } catch (error) {
-    console.error(error);
+    // 4️⃣ Projects & impact (10)
+    if (PROJECT_WORDS.some(w => text.includes(w))) {
+      score += 10;
+    }
+
+    // 5️⃣ ATS formatting (10)
+    if (!text.includes("|") && text.length > 500) {
+      score += 10;
+    }
+
+    score = Math.round(Math.min(score, 100));
+
+    let verdict = "Low Shortlisting Chance";
+    if (score >= 80) verdict = "Very High Shortlisting Chance";
+    else if (score >= 65) verdict = "High Shortlisting Chance";
+    else if (score >= 50) verdict = "Medium Shortlisting Chance";
+
+    return NextResponse.json({ score, verdict, missing });
+
+  } catch {
     return NextResponse.json(
-      { error: "Failed to process resume" },
+      { error: "ATS analysis failed" },
       { status: 500 }
     );
   }
